@@ -31,16 +31,24 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Find project root
+      - name: Find project root and debug
         id: find_root
         run: |
-          PKG_DIR=$(find extracted -name "package.json" -exec dirname {} \; | head -n 1)
+          PKG_DIR=$(find extracted -name "package.json" -not -path "*/node_modules/*" -exec dirname {} \; | head -n 1)
           if [ -z "$PKG_DIR" ]; then
             echo "Ошибка: package.json не найден!"
             exit 1
           fi
           echo "Корень проекта: $PKG_DIR"
           echo "root_dir=$PKG_DIR" >> $GITHUB_OUTPUT
+          echo "===== Содержимое корня ====="
+          ls -la "$PKG_DIR"
+          echo "===== Содержимое src (если есть) ====="
+          ls -la "$PKG_DIR/src" 2>/dev/null || echo "нет папки src"
+          echo "===== Содержимое src/lib (если есть) ====="
+          ls -la "$PKG_DIR/src/lib" 2>/dev/null || echo "нет папки src/lib"
+          echo "===== Поиск файла db.ts ====="
+          find "$PKG_DIR" -name "db.ts" -not -path "*/node_modules/*" || echo "db.ts не найден"
 
       - name: Install dependencies
         working-directory: ${{ steps.find_root.outputs.root_dir }}
@@ -49,7 +57,7 @@ jobs:
           rm -f package-lock.json
           npm install --no-audit --no-fund
 
-      - name: Rewrite config files
+      - name: Rewrite config and main files
         working-directory: ${{ steps.find_root.outputs.root_dir }}
         run: |
           cat > src/main.tsx << 'ENDOFMAIN'
@@ -70,47 +78,46 @@ jobs:
 
           cat > vite.config.ts << 'ENDOFCONFIG'
           import path from "path"
+          import fs from "fs"
           import { fileURLToPath } from "url"
           import react from "@vitejs/plugin-react"
           import { defineConfig } from "vite"
-          import { VitePWA } from 'vite-plugin-pwa'
 
           const __dirname = path.dirname(fileURLToPath(import.meta.url))
+          const SRC = path.resolve(__dirname, 'src')
+
+          function manualAlias() {
+            return {
+              name: 'manual-alias',
+              enforce: 'pre',
+              resolveId(source) {
+                if (!source.startsWith('@/')) return null
+                const base = path.join(SRC, source.slice(2))
+                const exts = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.json']
+                for (const ext of exts) {
+                  const c = base + ext
+                  if (fs.existsSync(c) && fs.statSync(c).isFile()) return c
+                }
+                for (const name of ['index.ts', 'index.tsx', 'index.js', 'index.jsx']) {
+                  const c = path.join(base, name)
+                  if (fs.existsSync(c)) return c
+                }
+                console.warn('[manual-alias] Не найдено:', source, '->', base)
+                return null
+              }
+            }
+          }
 
           export default defineConfig({
             base: './',
             plugins: [
-              react(),
-              VitePWA({
-                registerType: 'autoUpdate',
-                injectRegister: 'script',
-                includeAssets: ['favicon.png', 'icons/*.png'],
-                manifest: {
-                  name: 'JARVIS — офлайн ассистент',
-                  short_name: 'JARVIS',
-                  description: 'Полностью автономный голосовой ассистент',
-                  lang: 'ru',
-                  theme_color: '#050810',
-                  background_color: '#050810',
-                  display: 'standalone',
-                  orientation: 'portrait',
-                  start_url: './',
-                  icons: [
-                    { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-                    { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
-                    { src: 'icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-                  ],
-                },
-                workbox: {
-                  globPatterns: ['**/*.{js,css,html,png,svg,woff2}'],
-                  maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
-                  navigateFallback: 'index.html',
-                },
-              }),
+              manualAlias(),
+              react()
             ],
             resolve: {
-              alias: { "@": path.resolve(__dirname, "./src") },
-            },
+              alias: { "@": SRC },
+              extensions: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.json']
+            }
           });
           ENDOFCONFIG
 
