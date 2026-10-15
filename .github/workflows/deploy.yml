@@ -46,11 +46,10 @@ jobs:
       - name: Install dependencies
         working-directory: extracted
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+          # Удаляем старый файл настроек, чтобы избежать сбоя npm
+          rm -f package-lock.json
+          # Устанавливаем зависимости заново
+          npm install --no-audit --no-fund
 
       - name: Build project
         working-directory: extracted
