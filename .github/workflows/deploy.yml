@@ -34,13 +34,12 @@ jobs:
       - name: Find project root
         id: find_root
         run: |
-          # Робот ищет файл package.json в любой папке внутри архива
           PKG_DIR=$(find extracted -name "package.json" -exec dirname {} \; | head -n 1)
           if [ -z "$PKG_DIR" ]; then
-            echo "Ошибка: не удалось найти корень проекта (package.json) внутри архива!"
+            echo "Ошибка: package.json не найден!"
             exit 1
           fi
-          echo "Корень проекта найден в: $PKG_DIR"
+          echo "Корень проекта: $PKG_DIR"
           echo "root_dir=$PKG_DIR" >> $GITHUB_OUTPUT
 
       - name: Install dependencies
@@ -50,21 +49,70 @@ jobs:
           rm -f package-lock.json
           npm install --no-audit --no-fund
 
-      - name: Patch code for successful build
+      - name: Rewrite config files
+        working-directory: ${{ steps.find_root.outputs.root_dir }}
         run: |
-          # Находим файлы main.tsx и vite.config.ts в любом месте архива
-          ROOT_DIR="${{ steps.find_root.outputs.root_dir }}"
-          MAIN_TSX=$(find "$ROOT_DIR" -name "main.tsx" | head -n 1)
-          VITE_CONFIG=$(find "$ROOT_DIR" -name "vite.config.ts" | head -n 1)
+          cat > src/main.tsx << 'ENDOFMAIN'
+          import { StrictMode } from 'react'
+          import { createRoot } from 'react-dom/client'
+          import { BrowserRouter } from 'react-router'
+          import './index.css'
+          import App from './App.tsx'
 
-          if [ -n "$MAIN_TSX" ]; then
-            sed -i "s/import { registerSW } from 'virtual:pwa-register'//g" "$MAIN_TSX"
-            sed -i "s/registerSW({ immediate: true })//g" "$MAIN_TSX"
-          fi
+          createRoot(document.getElementById('root')!).render(
+            <StrictMode>
+              <BrowserRouter>
+                <App />
+              </BrowserRouter>
+            </StrictMode>,
+          )
+          ENDOFMAIN
 
-          if [ -n "$VITE_CONFIG" ]; then
-            sed -i "s/registerType: 'autoUpdate',/registerType: 'autoUpdate', injectRegister: 'script',/g" "$VITE_CONFIG"
-          fi
+          cat > vite.config.ts << 'ENDOFCONFIG'
+          import path from "path"
+          import { fileURLToPath } from "url"
+          import react from "@vitejs/plugin-react"
+          import { defineConfig } from "vite"
+          import { VitePWA } from 'vite-plugin-pwa'
+
+          const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+          export default defineConfig({
+            base: './',
+            plugins: [
+              react(),
+              VitePWA({
+                registerType: 'autoUpdate',
+                injectRegister: 'script',
+                includeAssets: ['favicon.png', 'icons/*.png'],
+                manifest: {
+                  name: 'JARVIS — офлайн ассистент',
+                  short_name: 'JARVIS',
+                  description: 'Полностью автономный голосовой ассистент',
+                  lang: 'ru',
+                  theme_color: '#050810',
+                  background_color: '#050810',
+                  display: 'standalone',
+                  orientation: 'portrait',
+                  start_url: './',
+                  icons: [
+                    { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+                    { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+                    { src: 'icons/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+                  ],
+                },
+                workbox: {
+                  globPatterns: ['**/*.{js,css,html,png,svg,woff2}'],
+                  maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+                  navigateFallback: 'index.html',
+                },
+              }),
+            ],
+            resolve: {
+              alias: { "@": path.resolve(__dirname, "./src") },
+            },
+          });
+          ENDOFCONFIG
 
       - name: Build project
         working-directory: ${{ steps.find_root.outputs.root_dir }}
