@@ -25,43 +25,49 @@ jobs:
         run: |
           mkdir -p extracted
           unzip -q app.zip -d extracted
-          # Если package.json лежит во вложенной папке, перемещаем всё наверх
-          if [ ! -f extracted/package.json ]; then
-            inner=$(find extracted -maxdepth 2 -name package.json -exec dirname {} \; | head -n 1)
-            if [ -n "$inner" ]; then
-              mv "$inner"/* extracted/
-            fi
-          fi
-          # Проверка, что package.json на месте
-          if [ ! -f extracted/package.json ]; then
-            echo "Ошибка: package.json не найден внутри архива!"
-            exit 1
-          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Install dependencies
-        working-directory: extracted
+      - name: Find project root
+        id: find_root
         run: |
-          # Полностью очищаем старые зависимости во избежание сбоев
+          # Робот ищет файл package.json в любой папке внутри архива
+          PKG_DIR=$(find extracted -name "package.json" -exec dirname {} \; | head -n 1)
+          if [ -z "$PKG_DIR" ]; then
+            echo "Ошибка: не удалось найти корень проекта (package.json) внутри архива!"
+            exit 1
+          fi
+          echo "Корень проекта найден в: $PKG_DIR"
+          echo "root_dir=$PKG_DIR" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        working-directory: ${{ steps.find_root.outputs.root_dir }}
+        run: |
           rm -rf node_modules
           rm -f package-lock.json
           npm install --no-audit --no-fund
 
       - name: Patch code for successful build
-        working-directory: extracted
         run: |
-          # Убираем проблемный импорт из main.tsx
-          sed -i "s/import { registerSW } from 'virtual:pwa-register'//g" src/main.tsx
-          sed -i "s/registerSW({ immediate: true })//g" src/main.tsx
-          # Добавляем настройку injectRegister в vite.config.ts, чтобы PWA всё равно работало
-          sed -i "s/registerType: 'autoUpdate',/registerType: 'autoUpdate', injectRegister: 'script',/g" vite.config.ts
+          # Находим файлы main.tsx и vite.config.ts в любом месте архива
+          ROOT_DIR="${{ steps.find_root.outputs.root_dir }}"
+          MAIN_TSX=$(find "$ROOT_DIR" -name "main.tsx" | head -n 1)
+          VITE_CONFIG=$(find "$ROOT_DIR" -name "vite.config.ts" | head -n 1)
+
+          if [ -n "$MAIN_TSX" ]; then
+            sed -i "s/import { registerSW } from 'virtual:pwa-register'//g" "$MAIN_TSX"
+            sed -i "s/registerSW({ immediate: true })//g" "$MAIN_TSX"
+          fi
+
+          if [ -n "$VITE_CONFIG" ]; then
+            sed -i "s/registerType: 'autoUpdate',/registerType: 'autoUpdate', injectRegister: 'script',/g" "$VITE_CONFIG"
+          fi
 
       - name: Build project
-        working-directory: extracted
+        working-directory: ${{ steps.find_root.outputs.root_dir }}
         run: npx vite build
 
       - name: Setup Pages
@@ -70,7 +76,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './extracted/dist'
+          path: ${{ steps.find_root.outputs.root_dir }}/dist
 
   deploy:
     environment:
