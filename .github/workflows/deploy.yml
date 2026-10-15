@@ -1,0 +1,76 @@
+name: Deploy PWA to GitHub Pages
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unzip app.zip
+        run: |
+          mkdir -p extracted
+          unzip -q app.zip -d extracted
+          # Если package.json лежит во вложенной папке, перемещаем всё наверх
+          if [ ! -f extracted/package.json ]; then
+            inner=$(find extracted -maxdepth 2 -name package.json -exec dirname {} \; | head -n 1)
+            if [ -n "$inner" ]; then
+              mv "$inner"/* extracted/
+            fi
+          fi
+          # Проверка, что package.json на месте
+          if [ ! -f extracted/package.json ]; then
+            echo "Ошибка: package.json не найден внутри архива!"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: extracted
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Build project
+        working-directory: extracted
+        run: npm run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './extracted/dist'
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
