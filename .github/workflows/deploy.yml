@@ -46,10 +46,19 @@ jobs:
       - name: Install dependencies
         working-directory: extracted
         run: |
-          # Удаляем старый файл настроек, чтобы избежать сбоя npm
+          # Полностью очищаем старые зависимости во избежание сбоев
+          rm -rf node_modules
           rm -f package-lock.json
-          # Устанавливаем зависимости заново
           npm install --no-audit --no-fund
+
+      - name: Patch code for successful build
+        working-directory: extracted
+        run: |
+          # Убираем проблемный импорт из main.tsx
+          sed -i "s/import { registerSW } from 'virtual:pwa-register'//g" src/main.tsx
+          sed -i "s/registerSW({ immediate: true })//g" src/main.tsx
+          # Добавляем настройку injectRegister в vite.config.ts, чтобы PWA всё равно работало
+          sed -i "s/registerType: 'autoUpdate',/registerType: 'autoUpdate', injectRegister: 'script',/g" vite.config.ts
 
       - name: Build project
         working-directory: extracted
